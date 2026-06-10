@@ -1,0 +1,27 @@
+{
+  "name": "studyforge",
+  "version": "1.0.0",
+  "description": "Upload lecture slides, PDFs, or handwritten notes and auto-generate editable practice quizzes with instant feedback and explanations.",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jkelsen13-tech/studyforge"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "heic-convert": "^2.1.1",
+    "multer": "^2.1.1",
+    "sharp": "^0.34.5"
+  }
+}

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StudyForge — Turn lecture materials into practice quizzes</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <button class="brand" id="brand-home" title="Home">
+      <span class="brand-mark">⚒</span> StudyForge
+    </button>
+  </header>
+
+  <main id="app">
+
+    <!-- ============ HOME / UPLOAD ============ -->
+    <section id="screen-home" class="screen">
+      <div class="hero">
+        <h1>Turn your lecture materials into practice quizzes</h1>
+        <p>Upload slide screenshots, PDF decks, or photos of handwritten notes. StudyForge reads them and builds an interactive quiz with instant feedback and explanations.</p>
+      </div>
+
+      <div class="card">
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <div class="dropzone-inner">
+            <div class="dropzone-icon">📄</div>
+            <p><strong>Drag &amp; drop files here</strong> or click to browse</p>
+            <p class="muted">JPG, PNG, HEIC, PDF · up to 12 files · 50MB each</p>
+          </div>
+          <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.heic,.heif,.pdf,image/*,application/pdf" hidden />
+        </div>
+
+        <ul id="file-list" class="file-list"></ul>
+
+        <div class="actions">
+          <button id="btn-generate" class="btn btn-primary" disabled>Generate Quiz</button>
+        </div>
+        <p id="upload-error" class="error" hidden></p>
+      </div>
+
+      <div class="card" id="saved-quizzes-card" hidden>
+        <h2>Your quizzes</h2>
+        <ul id="quiz-list" class="quiz-list"></ul>
+      </div>
+    </section>
+
+    <!-- ============ GENERATING ============ -->
+    <section id="screen-generating" class="screen" hidden>
+      <div class="card center">
+        <div class="spinner"></div>
+        <h2>Reading your materials…</h2>
+        <p class="muted" id="generating-status">Claude is extracting content and writing questions. This usually takes a minute or two.</p>
+      </div>
+    </section>
+
+    <!-- ============ REVIEW & EDIT ============ -->
+    <section id="screen-review" class="screen" hidden>
+      <div class="review-header card">
+        <label class="field-label" for="quiz-title">Quiz title</label>
+        <input type="text" id="quiz-title" class="title-input" />
+        <p class="muted"><span id="review-count"></span> — review and edit before launching. Click a radio button to change the correct answer.</p>
+      </div>
+
+      <div id="review-questions"></div>
+
+      <div class="actions sticky-actions">
+        <button id="btn-add-question" class="btn btn-secondary">+ Add Question</button>
+        <button id="btn-save-quiz" class="btn btn-secondary">Save for Later</button>
+        <button id="btn-launch-quiz" class="btn btn-primary">Save &amp; Start Quiz</button>
+      </div>
+      <p id="review-error" class="error" hidden></p>
+    </section>
+
+    <!-- ============ QUIZ PLAYER ============ -->
+    <section id="screen-quiz" class="screen" hidden>
+      <div class="quiz-status card">
+        <div class="quiz-progress-text">
+          <span id="quiz-position"></span>
+          <span id="quiz-score"></span>
+        </div>
+        <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+      </div>
+
+      <div class="card">
+        <h2 id="quiz-question" class="quiz-question"></h2>
+        <div id="quiz-options" class="quiz-options"></div>
+        <div id="quiz-feedback" class="feedback" hidden></div>
+        <div class="actions">
+          <button id="btn-next" class="btn btn-primary" hidden>Next Question →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ RESULTS ============ -->
+    <section id="screen-results" class="screen" hidden>
+      <div class="card center">
+        <h1 id="results-score"></h1>
+        <p id="results-summary" class="muted"></p>
+        <div class="actions center-actions">
+          <button id="btn-retake" class="btn btn-primary">Retake Quiz</button>
+          <button id="btn-results-home" class="btn btn-secondary">Back to Home</button>
+        </div>
+      </div>
+
+      <div id="missed-section" class="card" hidden>
+        <h2>Questions you missed</h2>
+        <div id="missed-list"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
