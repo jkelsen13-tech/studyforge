@@ -1,14 +1,18 @@
-/* StudyForge frontend — single-page app with five screens:
-   home/upload → generating → review/edit → quiz player → results */
+/* StudyForge frontend — screens:
+   home/upload → generating (job poll) → unit overview →
+   quiz player / results, review editor, activity players
+   (labeling, matching, ordering, scenario) */
 
 const $ = (id) => document.getElementById(id);
 
 const screens = {
   home: $("screen-home"),
   generating: $("screen-generating"),
+  unit: $("screen-unit"),
   review: $("screen-review"),
   quiz: $("screen-quiz"),
   results: $("screen-results"),
+  activity: $("screen-activity"),
 };
 
 function showScreen(name) {
@@ -19,12 +23,26 @@ function showScreen(name) {
 }
 
 // ---------- State ----------
-let selectedFiles = [];          // File objects queued for upload
-let draft = null;                // { id?, title, questions } being reviewed/edited
-let quiz = null;                 // saved quiz being played
-let current = 0;                 // current question index in player
+let selectedFiles = [];   // File objects queued for upload
+let unit = null;          // currently open unit
+let player = null;        // { context, questions, kind, moduleId } for the quiz player
+let editor = null;        // { kind: 'moduleQuiz'|'unitTest', moduleId?, title, questions }
+let activity = null;      // { moduleId, data } for the activity player
+let current = 0;
 let score = 0;
-let answers = [];                // chosen option index per question
+let answers = [];
+let pollTimer = null;
+
+const shuffle = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+const letter = (i) => String.fromCharCode(65 + i);
 
 // ============================================================
 // HOME / UPLOAD
@@ -66,7 +84,7 @@ function addFiles(files) {
     }
     if (selectedFiles.some((f) => f.name === file.name && f.size === file.size)) continue;
     if (selectedFiles.length >= 12) {
-      showError("upload-error", "You can upload at most 12 files per quiz.");
+      showError("upload-error", "You can upload at most 12 files per unit.");
       break;
     }
     selectedFiles.push(file);
@@ -105,73 +123,102 @@ function formatSize(bytes) {
 
 $("btn-generate").addEventListener("click", async () => {
   hideError("upload-error");
-  showScreen("generating");
 
   const form = new FormData();
   selectedFiles.forEach((f) => form.append("files", f));
 
   try {
-    const res = await fetch("/api/generate", { method: "POST", body: form });
+    $("generating-status").textContent = "Uploading files…";
+    showScreen("generating");
+    const res = await fetch("/api/units/generate", { method: "POST", body: form });
     const body = await res.json();
-    if (!res.ok) throw new Error(body.error || "Quiz generation failed.");
-
-    draft = { id: null, title: body.title, questions: body.questions };
-    selectedFiles = [];
-    renderFileList();
-    renderReview();
-    showScreen("review");
+    if (!res.ok) throw new Error(body.error || "Generation failed.");
+    pollJob(body.jobId);
   } catch (err) {
     showScreen("home");
     showError("upload-error", err.message);
   }
 });
 
-// ============================================================
-// SAVED QUIZZES
-// ============================================================
-async function loadQuizList() {
-  try {
-    const res = await fetch("/api/quizzes");
-    const quizzes = await res.json();
-    const card = $("saved-quizzes-card");
-    const list = $("quiz-list");
-    list.innerHTML = "";
-    card.hidden = quizzes.length === 0;
+function pollJob(jobId) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      const job = await res.json();
+      if (!res.ok) throw new Error(job.error || "Job lost.");
 
-    for (const q of quizzes) {
+      if (job.status === "running") {
+        $("generating-status").textContent = job.phase;
+        return;
+      }
+      clearInterval(pollTimer);
+
+      if (job.status === "error") throw new Error(job.error || "Generation failed.");
+
+      selectedFiles = [];
+      renderFileList();
+      await loadUnitList();
+      if (job.unitIds.length === 1) {
+        await openUnit(job.unitIds[0]);
+      } else {
+        showScreen("home");
+      }
+    } catch (err) {
+      clearInterval(pollTimer);
+      showScreen("home");
+      showError("upload-error", err.message);
+    }
+  }, 1500);
+}
+
+// ============================================================
+// UNITS LIST
+// ============================================================
+async function loadUnitList() {
+  try {
+    const res = await fetch("/api/units");
+    const units = await res.json();
+    const card = $("saved-units-card");
+    const list = $("unit-list");
+    list.innerHTML = "";
+    card.hidden = units.length === 0;
+
+    for (const u of units) {
       const li = document.createElement("li");
 
       const info = document.createElement("div");
       const title = document.createElement("div");
-      title.textContent = q.title;
+      title.textContent = u.title;
       const meta = document.createElement("div");
       meta.className = "quiz-meta";
-      meta.textContent = `${q.questionCount} questions · ${new Date(q.createdAt).toLocaleDateString()}`;
+      const bits = [
+        `${u.moduleCount} module${u.moduleCount === 1 ? "" : "s"}`,
+        `${u.unitTestCount}-question unit test`,
+      ];
+      if (u.activityCount > 0) bits.push(`${u.activityCount} activities`);
+      if (u.unitTestBest != null) bits.push(`best ${u.unitTestBest}%`);
+      meta.textContent = bits.join(" · ");
       info.append(title, meta);
 
       const actions = document.createElement("div");
       actions.className = "quiz-item-actions";
 
-      const start = document.createElement("button");
-      start.className = "btn btn-primary";
-      start.textContent = "Start";
-      start.addEventListener("click", () => startSavedQuiz(q.id));
-
-      const edit = document.createElement("button");
-      edit.className = "btn btn-secondary";
-      edit.textContent = "Edit";
-      edit.addEventListener("click", () => editSavedQuiz(q.id));
+      const open = document.createElement("button");
+      open.className = "btn btn-primary";
+      open.textContent = "Open";
+      open.addEventListener("click", () => openUnit(u.id));
 
       const del = document.createElement("button");
       del.className = "btn-danger-link";
       del.textContent = "Delete";
       del.addEventListener("click", async () => {
-        if (!confirm(`Delete "${q.title}"?`)) return;
-        await fetch(`/api/quizzes/${q.id}`, { method: "DELETE" });
-        loadQuizList();
+        if (!confirm(`Delete "${u.title}"?`)) return;
+        await fetch(`/api/units/${u.id}`, { method: "DELETE" });
+        loadUnitList();
       });
 
-      actions.append(start, edit, del);
+      actions.append(open, del);
       li.append(info, actions);
       list.appendChild(li);
     }
@@ -180,37 +227,163 @@ async function loadQuizList() {
   }
 }
 
-async function startSavedQuiz(id) {
-  const res = await fetch(`/api/quizzes/${id}`);
+// ============================================================
+// UNIT OVERVIEW
+// ============================================================
+async function openUnit(id) {
+  const res = await fetch(`/api/units/${id}`);
   if (!res.ok) return;
-  quiz = await res.json();
-  startQuiz();
+  unit = await res.json();
+  renderUnit();
+  showScreen("unit");
 }
 
-async function editSavedQuiz(id) {
-  const res = await fetch(`/api/quizzes/${id}`);
-  if (!res.ok) return;
-  const q = await res.json();
-  draft = { id: q.id, title: q.title, questions: q.questions };
-  renderReview();
-  showScreen("review");
+async function refreshUnit() {
+  if (!unit) return;
+  const res = await fetch(`/api/units/${unit.id}`);
+  if (res.ok) unit = await res.json();
 }
+
+const ACTIVITY_ICONS = { labeling: "🏷️", matching: "🔗", ordering: "🔀", scenario: "🎮" };
+
+function renderUnit() {
+  $("unit-title").textContent = unit.title;
+  const activityTotal = unit.modules.reduce((n, m) => n + m.activities.length, 0);
+  $("unit-meta").textContent = `${unit.modules.length} module${unit.modules.length === 1 ? "" : "s"} · ${activityTotal} interactive activit${activityTotal === 1 ? "y" : "ies"} · created ${new Date(unit.createdAt).toLocaleDateString()}`;
+
+  const container = $("unit-modules");
+  container.innerHTML = "";
+
+  unit.modules.forEach((mod, i) => {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const head = document.createElement("div");
+    head.className = "module-head";
+
+    const info = document.createElement("div");
+    const num = document.createElement("div");
+    num.className = "module-number";
+    num.textContent = `Module ${i + 1}`;
+    const title = document.createElement("h2");
+    title.textContent = mod.title;
+    const summary = document.createElement("p");
+    summary.className = "muted";
+    summary.textContent = mod.summary;
+    info.append(num, title, summary);
+    head.appendChild(info);
+
+    if (mod.progress?.quizBest != null) {
+      const badge = document.createElement("span");
+      badge.className = "best-badge";
+      badge.textContent = `Quiz best: ${mod.progress.quizBest}%`;
+      head.appendChild(badge);
+    }
+    card.appendChild(head);
+
+    const actions = document.createElement("div");
+    actions.className = "module-actions";
+
+    const quizBtn = document.createElement("button");
+    quizBtn.className = "btn btn-primary";
+    quizBtn.textContent = `Take Quiz (${mod.quiz.length} questions)`;
+    quizBtn.addEventListener("click", () =>
+      startPlayer({
+        context: `${unit.title} — Module ${i + 1}: ${mod.title}`,
+        questions: mod.quiz,
+        kind: "moduleQuiz",
+        moduleId: mod.id,
+      }),
+    );
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "btn btn-secondary";
+    editBtn.textContent = "Edit Quiz";
+    editBtn.addEventListener("click", () => openEditor({ kind: "moduleQuiz", moduleId: mod.id }));
+
+    actions.append(quizBtn, editBtn);
+    card.appendChild(actions);
+
+    if (mod.activities.length > 0) {
+      const chips = document.createElement("div");
+      chips.className = "activity-chips";
+      for (const act of mod.activities) {
+        const chip = document.createElement("button");
+        chip.className = "activity-chip";
+        const icon = ACTIVITY_ICONS[act.type] || "✨";
+        chip.append(document.createTextNode(`${icon} ${act.title}`));
+        if (mod.progress?.activitiesDone?.includes(act.id)) {
+          const done = document.createElement("span");
+          done.className = "done-mark";
+          done.textContent = "✓";
+          chip.appendChild(done);
+        }
+        chip.addEventListener("click", () => startActivity(mod.id, act));
+        chips.appendChild(chip);
+      }
+      card.appendChild(chips);
+    }
+
+    container.appendChild(card);
+  });
+
+  $("unit-test-meta").textContent = `${unit.unitTest.length} questions covering all modules`;
+  const best = $("unit-test-best");
+  if (unit.progress?.unitTestBest != null) {
+    best.textContent = `Best: ${unit.progress.unitTestBest}%`;
+    best.hidden = false;
+  } else {
+    best.hidden = true;
+  }
+}
+
+$("btn-start-unit-test").addEventListener("click", () =>
+  startPlayer({
+    context: `${unit.title} — Unit Test`,
+    questions: unit.unitTest,
+    kind: "unitTest",
+  }),
+);
+$("btn-edit-unit-test").addEventListener("click", () => openEditor({ kind: "unitTest" }));
 
 // ============================================================
-// REVIEW & EDIT
+// REVIEW & EDIT (module quiz or unit test)
 // ============================================================
 function blankQuestion() {
   return { question: "", options: ["", "", "", ""], correctIndex: 0, explanation: "" };
 }
 
+function openEditor({ kind, moduleId }) {
+  if (kind === "moduleQuiz") {
+    const mod = unit.modules.find((m) => m.id === moduleId);
+    editor = {
+      kind,
+      moduleId,
+      title: mod.title,
+      titleLabel: "Module title",
+      questions: JSON.parse(JSON.stringify(mod.quiz)),
+    };
+  } else {
+    editor = {
+      kind,
+      title: unit.title,
+      titleLabel: "Unit title",
+      questions: JSON.parse(JSON.stringify(unit.unitTest)),
+    };
+  }
+  renderReview();
+  showScreen("review");
+}
+
 function renderReview() {
-  $("quiz-title").value = draft.title;
-  $("review-count").textContent = `${draft.questions.length} question${draft.questions.length === 1 ? "" : "s"}`;
+  $("quiz-title-label").textContent = editor.titleLabel;
+  $("quiz-title").value = editor.title;
+  $("review-count").textContent = `${editor.questions.length} question${editor.questions.length === 1 ? "" : "s"}`;
   hideError("review-error");
 
   const container = $("review-questions");
   container.innerHTML = "";
-  draft.questions.forEach((q, qi) => container.appendChild(buildQuestionCard(q, qi)));
+  editor.questions.forEach((q, qi) => container.appendChild(buildQuestionCard(q, qi)));
 }
 
 function buildQuestionCard(q, qi) {
@@ -242,7 +415,7 @@ function buildQuestionCard(q, qi) {
     const text = document.createElement("input");
     text.type = "text";
     text.value = opt;
-    text.placeholder = `Option ${String.fromCharCode(65 + oi)}`;
+    text.placeholder = `Option ${letter(oi)}`;
     text.classList.toggle("is-correct", q.correctIndex === oi);
     text.addEventListener("input", () => (q.options[oi] = text.value));
 
@@ -273,7 +446,7 @@ function buildQuestionCard(q, qi) {
   del.className = "btn-danger-link";
   del.textContent = "Delete question";
   del.addEventListener("click", () => {
-    draft.questions.splice(qi, 1);
+    editor.questions.splice(qi, 1);
     renderReview();
   });
   footer.appendChild(del);
@@ -282,82 +455,75 @@ function buildQuestionCard(q, qi) {
   return card;
 }
 
-$("quiz-title").addEventListener("input", (e) => (draft.title = e.target.value));
+$("quiz-title").addEventListener("input", (e) => {
+  if (editor) editor.title = e.target.value;
+});
 
 $("btn-add-question").addEventListener("click", () => {
-  draft.questions.push(blankQuestion());
+  editor.questions.push(blankQuestion());
   renderReview();
-  // Scroll to the new (last) question card
   const cards = $("review-questions").children;
   cards[cards.length - 1]?.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 
-function validateDraft() {
-  if (!draft.title.trim()) return "Give your quiz a title.";
-  if (draft.questions.length === 0) return "Your quiz needs at least one question.";
-  for (let i = 0; i < draft.questions.length; i++) {
-    const q = draft.questions[i];
+$("btn-review-cancel").addEventListener("click", () => {
+  editor = null;
+  showScreen("unit");
+});
+
+function validateEditor() {
+  if (!editor.title.trim()) return "Give it a title.";
+  if (editor.questions.length === 0) return "You need at least one question.";
+  for (let i = 0; i < editor.questions.length; i++) {
+    const q = editor.questions[i];
     if (!q.question.trim()) return `Question ${i + 1} is missing its text.`;
     if (q.options.some((o) => !o.trim())) return `Question ${i + 1} has an empty answer option.`;
   }
   return null;
 }
 
-async function persistDraft() {
-  const error = validateDraft();
-  if (error) {
-    showError("review-error", error);
-    return null;
-  }
+$("btn-save-quiz").addEventListener("click", async () => {
+  const error = validateEditor();
+  if (error) return showError("review-error", error);
   hideError("review-error");
 
-  const payload = { title: draft.title.trim(), questions: draft.questions };
-  const res = await fetch(draft.id ? `/api/quizzes/${draft.id}` : "/api/quizzes", {
-    method: draft.id ? "PUT" : "POST",
+  const url =
+    editor.kind === "moduleQuiz"
+      ? `/api/units/${unit.id}/modules/${editor.moduleId}/quiz`
+      : `/api/units/${unit.id}/unit-test`;
+
+  const res = await fetch(url, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ title: editor.title.trim(), questions: editor.questions }),
   });
   const body = await res.json();
-  if (!res.ok) {
-    showError("review-error", body.error || "Failed to save quiz.");
-    return null;
-  }
-  draft.id = body.id;
-  return body;
-}
+  if (!res.ok) return showError("review-error", body.error || "Failed to save.");
 
-$("btn-save-quiz").addEventListener("click", async () => {
-  const saved = await persistDraft();
-  if (saved) {
-    await loadQuizList();
-    showScreen("home");
-  }
-});
-
-$("btn-launch-quiz").addEventListener("click", async () => {
-  const saved = await persistDraft();
-  if (saved) {
-    quiz = saved;
-    loadQuizList();
-    startQuiz();
-  }
+  unit = body;
+  editor = null;
+  renderUnit();
+  loadUnitList();
+  showScreen("unit");
 });
 
 // ============================================================
-// QUIZ PLAYER
+// QUIZ PLAYER (module quizzes and unit tests)
 // ============================================================
-function startQuiz() {
+function startPlayer(config) {
+  player = config;
   current = 0;
   score = 0;
-  answers = new Array(quiz.questions.length).fill(null);
+  answers = new Array(player.questions.length).fill(null);
   renderQuestion();
   showScreen("quiz");
 }
 
 function renderQuestion() {
-  const total = quiz.questions.length;
-  const q = quiz.questions[current];
+  const total = player.questions.length;
+  const q = player.questions[current];
 
+  $("quiz-context").textContent = player.context;
   $("quiz-position").textContent = `Question ${current + 1} of ${total}`;
   $("quiz-score").textContent = `Score: ${score}/${current}`;
   $("progress-fill").style.width = `${(current / total) * 100}%`;
@@ -374,21 +540,21 @@ function renderQuestion() {
     const btn = document.createElement("button");
     btn.className = "option-btn";
 
-    const letter = document.createElement("span");
-    letter.className = "option-letter";
-    letter.textContent = String.fromCharCode(65 + oi);
+    const l = document.createElement("span");
+    l.className = "option-letter";
+    l.textContent = letter(oi);
 
     const label = document.createElement("span");
     label.textContent = opt;
 
-    btn.append(letter, label);
+    btn.append(l, label);
     btn.addEventListener("click", () => answerQuestion(oi));
     optionsEl.appendChild(btn);
   });
 }
 
 function answerQuestion(chosen) {
-  const q = quiz.questions[current];
+  const q = player.questions[current];
   const correct = chosen === q.correctIndex;
   answers[current] = chosen;
   if (correct) score++;
@@ -414,7 +580,7 @@ function answerQuestion(chosen) {
     feedback.appendChild(title);
   } else {
     feedback.classList.add("bad");
-    title.textContent = `✗ Incorrect — the answer is ${String.fromCharCode(65 + q.correctIndex)}.`;
+    title.textContent = `✗ Incorrect — the answer is ${letter(q.correctIndex)}.`;
     feedback.appendChild(title);
     if (q.explanation) {
       const expl = document.createElement("div");
@@ -425,31 +591,50 @@ function answerQuestion(chosen) {
   feedback.hidden = false;
 
   const next = $("btn-next");
-  next.textContent = current + 1 === quiz.questions.length ? "See Results →" : "Next Question →";
+  next.textContent = current + 1 === player.questions.length ? "See Results →" : "Next Question →";
   next.hidden = false;
   next.focus();
 }
 
 $("btn-next").addEventListener("click", () => {
   current++;
-  if (current >= quiz.questions.length) {
-    renderResults();
-    showScreen("results");
+  if (current >= player.questions.length) {
+    finishPlayer();
   } else {
     renderQuestion();
   }
 });
 
+async function finishPlayer() {
+  const pct = Math.round((score / player.questions.length) * 100);
+
+  // Record best score on the unit (fire-and-forget from the user's view).
+  if (unit && (player.kind === "moduleQuiz" || player.kind === "unitTest")) {
+    try {
+      const res = await fetch(`/api/units/${unit.id}/progress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: player.kind, moduleId: player.moduleId, score: pct }),
+      });
+      if (res.ok) unit = await res.json();
+    } catch {
+      /* progress saving is best-effort */
+    }
+  }
+
+  renderResults(pct);
+  showScreen("results");
+}
+
 // ============================================================
 // RESULTS
 // ============================================================
-function renderResults() {
-  const total = quiz.questions.length;
-  const pct = Math.round((score / total) * 100);
+function renderResults(pct) {
+  const total = player.questions.length;
   $("results-score").textContent = `${pct}%`;
-  $("results-summary").textContent = `You answered ${score} of ${total} questions correctly on "${quiz.title}".`;
+  $("results-summary").textContent = `You answered ${score} of ${total} questions correctly on "${player.context}".`;
 
-  const missed = quiz.questions
+  const missed = player.questions
     .map((q, i) => ({ q, chosen: answers[i] }))
     .filter(({ q, chosen }) => chosen !== q.correctIndex);
 
@@ -467,11 +652,11 @@ function renderResults() {
 
     const yours = document.createElement("div");
     yours.className = "missed-your";
-    yours.textContent = `Your answer: ${String.fromCharCode(65 + chosen)}. ${q.options[chosen]}`;
+    yours.textContent = `Your answer: ${letter(chosen)}. ${q.options[chosen]}`;
 
     const right = document.createElement("div");
     right.className = "missed-correct";
-    right.textContent = `Correct answer: ${String.fromCharCode(65 + q.correctIndex)}. ${q.options[q.correctIndex]}`;
+    right.textContent = `Correct answer: ${letter(q.correctIndex)}. ${q.options[q.correctIndex]}`;
 
     item.append(question, yours, right);
 
@@ -485,11 +670,493 @@ function renderResults() {
   }
 }
 
-$("btn-retake").addEventListener("click", startQuiz);
-$("btn-results-home").addEventListener("click", () => {
-  loadQuizList();
-  showScreen("home");
+$("btn-retake").addEventListener("click", () => startPlayer(player));
+$("btn-results-back").addEventListener("click", () => {
+  renderUnit();
+  showScreen("unit");
 });
+
+// ============================================================
+// ACTIVITY PLAYER
+// ============================================================
+const activityUI = {
+  body: () => $("activity-body"),
+  feedback: () => $("activity-feedback"),
+  check: () => $("btn-activity-check"),
+  reset: () => $("btn-activity-reset"),
+};
+
+function startActivity(moduleId, data) {
+  activity = { moduleId, data };
+  $("activity-title").textContent = `${ACTIVITY_ICONS[data.type] || "✨"} ${data.title}`;
+  $("activity-instructions").textContent = data.instructions;
+  renderActivity();
+  showScreen("activity");
+}
+
+function renderActivity() {
+  const fb = activityUI.feedback();
+  fb.hidden = true;
+  fb.className = "feedback";
+  activityUI.reset().hidden = true;
+  activityUI.check().hidden = false;
+  activityUI.check().disabled = false;
+
+  const body = activityUI.body();
+  body.innerHTML = "";
+
+  const { data } = activity;
+  if (data.type === "labeling") renderLabeling(body, data);
+  else if (data.type === "matching") renderMatching(body, data);
+  else if (data.type === "ordering") renderOrdering(body, data);
+  else if (data.type === "scenario") renderScenario(body, data);
+}
+
+async function completeActivity(scoreText, allCorrect) {
+  const fb = activityUI.feedback();
+  fb.innerHTML = "";
+  fb.classList.add(allCorrect ? "good" : "bad");
+  const title = document.createElement("div");
+  title.className = "feedback-title";
+  title.textContent = scoreText;
+  fb.appendChild(title);
+  fb.hidden = false;
+
+  activityUI.check().hidden = true;
+  activityUI.reset().hidden = false;
+
+  if (unit) {
+    try {
+      const res = await fetch(`/api/units/${unit.id}/progress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "activity", moduleId: activity.moduleId, activityId: activity.data.id }),
+      });
+      if (res.ok) unit = await res.json();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+$("btn-activity-back").addEventListener("click", () => {
+  renderUnit();
+  showScreen("unit");
+});
+$("btn-activity-reset").addEventListener("click", renderActivity);
+
+// ---------- Labeling ----------
+function renderLabeling(body, data) {
+  // Markers are numbered points on the image; the user pairs each with a
+  // label from the shuffled word bank (click a marker, then a label — or the
+  // reverse). Check compares assignments against the generated answer key.
+  const assignments = new Array(data.labels.length).fill(null); // marker index -> label text
+  let selectedMarker = null;
+  let selectedChip = null;
+
+  const stage = document.createElement("div");
+  stage.className = "labeling-stage";
+  const img = document.createElement("img");
+  img.src = data.image;
+  img.alt = data.title;
+  stage.appendChild(img);
+
+  const markers = data.labels.map((label, i) => {
+    const m = document.createElement("button");
+    m.className = "label-marker";
+    m.textContent = i + 1;
+    m.style.left = `${label.x * 100}%`;
+    m.style.top = `${label.y * 100}%`;
+    m.addEventListener("click", () => {
+      if (checkDone) return;
+      selectedMarker = selectedMarker === i ? null : i;
+      markers.forEach((mk, j) => mk.classList.toggle("selected", selectedMarker === j));
+      tryAssign();
+    });
+    stage.appendChild(m);
+    return m;
+  });
+
+  const hint = document.createElement("p");
+  hint.className = "hint-text";
+  hint.textContent = "Tap a numbered point, then tap the label that belongs there (or pick the label first).";
+
+  const list = document.createElement("ul");
+  list.className = "assignment-list";
+  const slots = data.labels.map((_, i) => {
+    const li = document.createElement("li");
+    const num = document.createElement("span");
+    num.className = "assignment-num";
+    num.textContent = i + 1;
+    const slot = document.createElement("span");
+    slot.className = "assignment-slot";
+    slot.textContent = "— unassigned —";
+    li.append(num, slot);
+    li.addEventListener("click", () => {
+      if (checkDone || assignments[i] === null) return;
+      // Clicking a filled row clears it back to the bank.
+      const text = assignments[i];
+      assignments[i] = null;
+      slot.textContent = "— unassigned —";
+      slot.classList.remove("filled");
+      chips.find((c) => c.textContent === text)?.classList.remove("used");
+      updateCheckState();
+    });
+    list.appendChild(li);
+    return { li, slot };
+  });
+
+  const bank = document.createElement("div");
+  bank.className = "word-bank";
+  const chips = shuffle(data.labels.map((l) => l.text)).map((text) => {
+    const chip = document.createElement("button");
+    chip.className = "word-chip";
+    chip.textContent = text;
+    chip.addEventListener("click", () => {
+      if (checkDone || chip.classList.contains("used")) return;
+      selectedChip = selectedChip === chip ? null : chip;
+      chips.forEach((c) => c.classList.toggle("selected", c === selectedChip));
+      tryAssign();
+    });
+    bank.appendChild(chip);
+    return chip;
+  });
+
+  let checkDone = false;
+
+  function tryAssign() {
+    if (selectedMarker === null || !selectedChip) return;
+    const i = selectedMarker;
+    // If the marker already had a label, release it back to the bank.
+    if (assignments[i]) {
+      chips.find((c) => c.textContent === assignments[i])?.classList.remove("used");
+    }
+    assignments[i] = selectedChip.textContent;
+    slots[i].slot.textContent = selectedChip.textContent;
+    slots[i].slot.classList.add("filled");
+    selectedChip.classList.add("used");
+    selectedChip.classList.remove("selected");
+    markers[i].classList.remove("selected");
+    selectedMarker = null;
+    selectedChip = null;
+    updateCheckState();
+  }
+
+  function updateCheckState() {
+    activityUI.check().disabled = assignments.some((a) => a === null);
+  }
+
+  updateCheckState();
+
+  activityUI.check().onclick = () => {
+    checkDone = true;
+    let correct = 0;
+    data.labels.forEach((label, i) => {
+      const ok = assignments[i] === label.text;
+      if (ok) correct++;
+      markers[i].classList.add(ok ? "correct" : "wrong");
+      slots[i].li.classList.add(ok ? "correct" : "wrong");
+      if (!ok) {
+        const fix = document.createElement("span");
+        fix.className = "assignment-fix";
+        fix.textContent = `✓ ${label.text}`;
+        slots[i].li.appendChild(fix);
+      }
+    });
+    chips.forEach((c) => (c.disabled = true));
+    completeActivity(
+      `You placed ${correct} of ${data.labels.length} labels correctly.`,
+      correct === data.labels.length,
+    );
+  };
+
+  body.append(stage, hint, list, bank);
+}
+
+// ---------- Matching ----------
+function renderMatching(body, data) {
+  // Click one item in each column to pair them; pairs get a shared tag.
+  // Clicking a paired item unpairs it.
+  const n = data.pairs.length;
+  const rightOrder = shuffle(data.pairs.map((_, i) => i)); // display order -> pair index
+  const pairsChosen = new Array(n).fill(null); // left index -> right pair index
+  let selectedLeft = null;
+  let selectedRight = null;
+  let checkDone = false;
+
+  const grid = document.createElement("div");
+  grid.className = "match-grid";
+  const leftCol = document.createElement("div");
+  leftCol.className = "match-col";
+  const rightCol = document.createElement("div");
+  rightCol.className = "match-col";
+  grid.append(leftCol, rightCol);
+
+  const leftBtns = data.pairs.map((p, i) => {
+    const btn = document.createElement("button");
+    btn.className = "match-item";
+    btn.textContent = p.left;
+    btn.addEventListener("click", () => {
+      if (checkDone) return;
+      if (pairsChosen[i] !== null) return unpair(i);
+      selectedLeft = selectedLeft === i ? null : i;
+      refreshSelection();
+      tryPair();
+    });
+    leftCol.appendChild(btn);
+    return btn;
+  });
+
+  const rightBtns = rightOrder.map((pairIdx) => {
+    const btn = document.createElement("button");
+    btn.className = "match-item";
+    btn.textContent = data.pairs[pairIdx].right;
+    btn.dataset.pairIdx = pairIdx;
+    btn.addEventListener("click", () => {
+      if (checkDone) return;
+      const owner = pairsChosen.indexOf(pairIdx);
+      if (owner !== -1) return unpair(owner);
+      selectedRight = selectedRight === pairIdx ? null : pairIdx;
+      refreshSelection();
+      tryPair();
+    });
+    rightCol.appendChild(btn);
+    return btn;
+  });
+
+  function rightBtnFor(pairIdx) {
+    return rightBtns.find((b) => Number(b.dataset.pairIdx) === pairIdx);
+  }
+
+  function refreshSelection() {
+    leftBtns.forEach((b, i) => b.classList.toggle("selected", selectedLeft === i));
+    rightBtns.forEach((b) => b.classList.toggle("selected", selectedRight === Number(b.dataset.pairIdx)));
+  }
+
+  function tagPairs() {
+    leftBtns.forEach((b, i) => {
+      const existing = b.querySelector(".pair-tag");
+      if (existing) existing.remove();
+      if (pairsChosen[i] !== null) {
+        const tag = document.createElement("span");
+        tag.className = "pair-tag";
+        tag.textContent = `#${i + 1}`;
+        b.prepend(tag);
+      }
+      b.classList.toggle("paired", pairsChosen[i] !== null);
+    });
+    rightBtns.forEach((b) => {
+      const existing = b.querySelector(".pair-tag");
+      if (existing) existing.remove();
+      const owner = pairsChosen.indexOf(Number(b.dataset.pairIdx));
+      if (owner !== -1) {
+        const tag = document.createElement("span");
+        tag.className = "pair-tag";
+        tag.textContent = `#${owner + 1}`;
+        b.prepend(tag);
+      }
+      b.classList.toggle("paired", owner !== -1);
+    });
+  }
+
+  function tryPair() {
+    if (selectedLeft === null || selectedRight === null) return;
+    pairsChosen[selectedLeft] = selectedRight;
+    selectedLeft = null;
+    selectedRight = null;
+    refreshSelection();
+    tagPairs();
+    activityUI.check().disabled = pairsChosen.some((p) => p === null);
+  }
+
+  function unpair(leftIdx) {
+    pairsChosen[leftIdx] = null;
+    tagPairs();
+    activityUI.check().disabled = true;
+  }
+
+  activityUI.check().disabled = true;
+
+  activityUI.check().onclick = () => {
+    checkDone = true;
+    let correct = 0;
+    leftBtns.forEach((b, i) => {
+      const ok = pairsChosen[i] === i;
+      if (ok) correct++;
+      b.classList.add(ok ? "correct" : "wrong");
+      const rb = rightBtnFor(pairsChosen[i]);
+      rb?.classList.add(ok ? "correct" : "wrong");
+      if (!ok) {
+        const fix = document.createElement("div");
+        fix.className = "missed-correct";
+        fix.textContent = `✓ ${data.pairs[i].right}`;
+        b.appendChild(fix);
+      }
+    });
+    completeActivity(`You matched ${correct} of ${n} pairs correctly.`, correct === n);
+  };
+
+  body.appendChild(grid);
+}
+
+// ---------- Ordering ----------
+function renderOrdering(body, data) {
+  // Items start shuffled (guaranteed not already correct); ↑/↓ reorder.
+  let order = shuffle(data.items.map((_, i) => i));
+  if (order.every((v, i) => v === i) && order.length > 1) {
+    [order[0], order[1]] = [order[1], order[0]];
+  }
+  let checkDone = false;
+
+  const list = document.createElement("ol");
+  list.className = "order-list";
+
+  function render() {
+    list.innerHTML = "";
+    order.forEach((itemIdx, pos) => {
+      const li = document.createElement("li");
+
+      const posEl = document.createElement("span");
+      posEl.className = "order-pos";
+      posEl.textContent = pos + 1;
+
+      const text = document.createElement("span");
+      text.className = "order-text";
+      text.textContent = data.items[itemIdx];
+
+      li.append(posEl, text);
+
+      if (!checkDone) {
+        const buttons = document.createElement("div");
+        buttons.className = "order-buttons";
+        const up = document.createElement("button");
+        up.className = "order-move";
+        up.textContent = "↑";
+        up.disabled = pos === 0;
+        up.addEventListener("click", () => {
+          [order[pos - 1], order[pos]] = [order[pos], order[pos - 1]];
+          render();
+        });
+        const down = document.createElement("button");
+        down.className = "order-move";
+        down.textContent = "↓";
+        down.disabled = pos === order.length - 1;
+        down.addEventListener("click", () => {
+          [order[pos + 1], order[pos]] = [order[pos], order[pos + 1]];
+          render();
+        });
+        buttons.append(up, down);
+        li.appendChild(buttons);
+      } else {
+        const ok = itemIdx === pos;
+        li.classList.add(ok ? "correct" : "wrong");
+        if (!ok) {
+          const fix = document.createElement("span");
+          fix.className = "order-fix";
+          fix.textContent = `step ${itemIdx + 1}`;
+          li.appendChild(fix);
+        }
+      }
+      list.appendChild(li);
+    });
+  }
+
+  render();
+
+  activityUI.check().onclick = () => {
+    checkDone = true;
+    render();
+    const correct = order.filter((itemIdx, pos) => itemIdx === pos).length;
+    completeActivity(
+      `You placed ${correct} of ${order.length} steps in the right position.`,
+      correct === order.length,
+    );
+  };
+
+  body.appendChild(list);
+}
+
+// ---------- Scenario ----------
+function renderScenario(body, data) {
+  // A step-by-step simulation: each step shows a situation and choices; every
+  // choice gets feedback, then the learner moves on. Score = best choices made.
+  let step = 0;
+  let bestCount = 0;
+
+  activityUI.check().hidden = true; // scenario advances itself
+
+  function renderStep() {
+    body.innerHTML = "";
+
+    const progress = document.createElement("div");
+    progress.className = "scenario-progress";
+    progress.textContent = `Step ${step + 1} of ${data.steps.length}`;
+
+    const situation = document.createElement("div");
+    situation.className = "scenario-situation";
+    situation.textContent = data.steps[step].situation;
+
+    const options = document.createElement("div");
+    options.className = "scenario-options";
+
+    const opts = shuffle(data.steps[step].options);
+    opts.forEach((opt) => {
+      const btn = document.createElement("button");
+      btn.className = "option-btn";
+      const label = document.createElement("span");
+      label.textContent = opt.text;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        if (opt.isBest) bestCount++;
+        [...options.children].forEach((b, i) => {
+          b.disabled = true;
+          if (opts[i].isBest) b.classList.add("correct");
+          else if (opts[i] === opt) b.classList.add("wrong");
+          else b.classList.add("dimmed");
+        });
+
+        const fb = document.createElement("div");
+        fb.className = `feedback ${opt.isBest ? "good" : "bad"}`;
+        const title = document.createElement("div");
+        title.className = "feedback-title";
+        title.textContent = opt.isBest ? "✓ Good call!" : "✗ Not the best choice.";
+        fb.appendChild(title);
+        if (opt.feedback) {
+          const detail = document.createElement("div");
+          detail.textContent = opt.feedback;
+          fb.appendChild(detail);
+        }
+        body.appendChild(fb);
+
+        const next = document.createElement("div");
+        next.className = "actions";
+        const nextBtn = document.createElement("button");
+        nextBtn.className = "btn btn-primary";
+        nextBtn.textContent = step + 1 === data.steps.length ? "Finish →" : "Next Step →";
+        nextBtn.addEventListener("click", () => {
+          step++;
+          if (step >= data.steps.length) {
+            body.innerHTML = "";
+            completeActivity(
+              `You made the best call on ${bestCount} of ${data.steps.length} steps.`,
+              bestCount === data.steps.length,
+            );
+          } else {
+            renderStep();
+          }
+        });
+        next.appendChild(nextBtn);
+        body.appendChild(next);
+        nextBtn.focus();
+      });
+      options.appendChild(btn);
+    });
+
+    body.append(progress, situation, options);
+  }
+
+  renderStep();
+}
 
 // ============================================================
 // Shared helpers
@@ -504,9 +1171,10 @@ function hideError(id) {
 }
 
 $("brand-home").addEventListener("click", () => {
-  loadQuizList();
+  clearInterval(pollTimer);
+  loadUnitList();
   showScreen("home");
 });
 
 // Boot
-loadQuizList();
+loadUnitList();

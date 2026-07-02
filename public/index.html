@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>StudyForge — Turn lecture materials into practice quizzes</title>
+  <title>StudyForge — Turn lecture materials into interactive study units</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -18,8 +18,8 @@
     <!-- ============ HOME / UPLOAD ============ -->
     <section id="screen-home" class="screen">
       <div class="hero">
-        <h1>Turn your lecture materials into practice quizzes</h1>
-        <p>Upload slide screenshots, PDF decks, or photos of handwritten notes. StudyForge reads them and builds an interactive quiz with instant feedback and explanations.</p>
+        <h1>Turn your lecture materials into interactive study units</h1>
+        <p>Upload slide screenshots, PDF decks, or photos of handwritten notes. StudyForge organizes them into units and modules — each with quizzes, a unit test, and interactive exercises built from your material.</p>
       </div>
 
       <div class="card">
@@ -35,14 +35,14 @@
         <ul id="file-list" class="file-list"></ul>
 
         <div class="actions">
-          <button id="btn-generate" class="btn btn-primary" disabled>Generate Quiz</button>
+          <button id="btn-generate" class="btn btn-primary" disabled>Build Study Unit</button>
         </div>
         <p id="upload-error" class="error" hidden></p>
       </div>
 
-      <div class="card" id="saved-quizzes-card" hidden>
-        <h2>Your quizzes</h2>
-        <ul id="quiz-list" class="quiz-list"></ul>
+      <div class="card" id="saved-units-card" hidden>
+        <h2>Your units</h2>
+        <ul id="unit-list" class="quiz-list"></ul>
       </div>
     </section>
 
@@ -50,15 +50,40 @@
     <section id="screen-generating" class="screen" hidden>
       <div class="card center">
         <div class="spinner"></div>
-        <h2>Reading your materials…</h2>
-        <p class="muted" id="generating-status">Claude is extracting content and writing questions. This usually takes a minute or two.</p>
+        <h2>Forging your study unit…</h2>
+        <p class="muted" id="generating-status">Uploading files…</p>
+        <p class="muted small">Claude reads everything, splits it into modules, then writes quizzes, exercises, and a unit test. Larger uploads can take a few minutes.</p>
+      </div>
+    </section>
+
+    <!-- ============ UNIT OVERVIEW ============ -->
+    <section id="screen-unit" class="screen" hidden>
+      <div class="card unit-header">
+        <h1 id="unit-title" class="unit-title"></h1>
+        <p class="muted" id="unit-meta"></p>
+      </div>
+
+      <div id="unit-modules"></div>
+
+      <div class="card unit-test-card">
+        <div class="module-head">
+          <div>
+            <h2>🎓 Unit Test</h2>
+            <p class="muted" id="unit-test-meta"></p>
+          </div>
+          <span id="unit-test-best" class="best-badge" hidden></span>
+        </div>
+        <div class="actions left-actions">
+          <button id="btn-start-unit-test" class="btn btn-primary">Start Unit Test</button>
+          <button id="btn-edit-unit-test" class="btn btn-secondary">Edit Questions</button>
+        </div>
       </div>
     </section>
 
     <!-- ============ REVIEW & EDIT ============ -->
     <section id="screen-review" class="screen" hidden>
       <div class="review-header card">
-        <label class="field-label" for="quiz-title">Quiz title</label>
+        <label class="field-label" for="quiz-title" id="quiz-title-label">Title</label>
         <input type="text" id="quiz-title" class="title-input" />
         <p class="muted"><span id="review-count"></span> — review and edit before launching. Click a radio button to change the correct answer.</p>
       </div>
@@ -67,8 +92,8 @@
 
       <div class="actions sticky-actions">
         <button id="btn-add-question" class="btn btn-secondary">+ Add Question</button>
-        <button id="btn-save-quiz" class="btn btn-secondary">Save for Later</button>
-        <button id="btn-launch-quiz" class="btn btn-primary">Save &amp; Start Quiz</button>
+        <button id="btn-review-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="btn-save-quiz" class="btn btn-primary">Save Changes</button>
       </div>
       <p id="review-error" class="error" hidden></p>
     </section>
@@ -76,6 +101,9 @@
     <!-- ============ QUIZ PLAYER ============ -->
     <section id="screen-quiz" class="screen" hidden>
       <div class="quiz-status card">
+        <div class="quiz-progress-text">
+          <span id="quiz-context" class="muted small"></span>
+        </div>
         <div class="quiz-progress-text">
           <span id="quiz-position"></span>
           <span id="quiz-score"></span>
@@ -99,14 +127,29 @@
         <h1 id="results-score"></h1>
         <p id="results-summary" class="muted"></p>
         <div class="actions center-actions">
-          <button id="btn-retake" class="btn btn-primary">Retake Quiz</button>
-          <button id="btn-results-home" class="btn btn-secondary">Back to Home</button>
+          <button id="btn-retake" class="btn btn-primary">Retake</button>
+          <button id="btn-results-back" class="btn btn-secondary">Back to Unit</button>
         </div>
       </div>
 
       <div id="missed-section" class="card" hidden>
         <h2>Questions you missed</h2>
         <div id="missed-list"></div>
+      </div>
+    </section>
+
+    <!-- ============ ACTIVITY PLAYER ============ -->
+    <section id="screen-activity" class="screen" hidden>
+      <div class="card">
+        <h2 id="activity-title"></h2>
+        <p class="muted" id="activity-instructions"></p>
+        <div id="activity-body"></div>
+        <div id="activity-feedback" class="feedback" hidden></div>
+        <div class="actions">
+          <button id="btn-activity-back" class="btn btn-secondary">Back to Unit</button>
+          <button id="btn-activity-reset" class="btn btn-secondary" hidden>Try Again</button>
+          <button id="btn-activity-check" class="btn btn-primary" hidden>Check Answers</button>
+        </div>
       </div>
     </section>
 

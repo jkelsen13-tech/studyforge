@@ -4,7 +4,9 @@ import { randomUUID } from "crypto";
 import { fileURLToPath } from "url";
 
 const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data");
-const DATA_FILE = path.join(DATA_DIR, "quizzes.json");
+const DATA_FILE = path.join(DATA_DIR, "units.json");
+
+export const ASSETS_DIR = path.join(DATA_DIR, "assets");
 
 // Serialize writes so concurrent requests can't interleave read-modify-write.
 let writeLock = Promise.resolve();
@@ -18,10 +20,10 @@ async function readAll() {
   }
 }
 
-async function writeAll(quizzes) {
+async function writeAll(units) {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmp = `${DATA_FILE}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(quizzes, null, 2));
+  await fs.writeFile(tmp, JSON.stringify(units, null, 2));
   await fs.rename(tmp, DATA_FILE);
 }
 
@@ -31,56 +33,55 @@ function withLock(fn) {
   return run;
 }
 
-export async function listQuizzes() {
-  const quizzes = await readAll();
-  return quizzes
-    .map(({ id, title, questions, createdAt }) => ({
-      id,
-      title,
-      questionCount: questions.length,
-      createdAt,
+export async function listUnits() {
+  const units = await readAll();
+  return units
+    .map((u) => ({
+      id: u.id,
+      title: u.title,
+      moduleCount: u.modules.length,
+      unitTestCount: u.unitTest.length,
+      activityCount: u.modules.reduce((n, m) => n + m.activities.length, 0),
+      unitTestBest: u.progress?.unitTestBest ?? null,
+      createdAt: u.createdAt,
     }))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
-export async function getQuiz(id) {
-  const quizzes = await readAll();
-  return quizzes.find((q) => q.id === id) || null;
+export async function getUnit(id) {
+  const units = await readAll();
+  return units.find((u) => u.id === id) || null;
 }
 
-export function createQuiz({ title, questions }) {
+export function createUnit(unit) {
   return withLock(async () => {
-    const quizzes = await readAll();
-    const quiz = {
-      id: randomUUID(),
-      title,
-      questions,
-      createdAt: new Date().toISOString(),
-    };
-    quizzes.push(quiz);
-    await writeAll(quizzes);
-    return quiz;
+    const units = await readAll();
+    const record = { id: randomUUID(), createdAt: new Date().toISOString(), ...unit };
+    units.push(record);
+    await writeAll(units);
+    return record;
   });
 }
 
-export function updateQuiz(id, { title, questions }) {
+export function deleteUnit(id) {
   return withLock(async () => {
-    const quizzes = await readAll();
-    const quiz = quizzes.find((q) => q.id === id);
-    if (!quiz) return null;
-    quiz.title = title;
-    quiz.questions = questions;
-    await writeAll(quizzes);
-    return quiz;
-  });
-}
-
-export function deleteQuiz(id) {
-  return withLock(async () => {
-    const quizzes = await readAll();
-    const next = quizzes.filter((q) => q.id !== id);
-    if (next.length === quizzes.length) return false;
+    const units = await readAll();
+    const next = units.filter((u) => u.id !== id);
+    if (next.length === units.length) return false;
     await writeAll(next);
     return true;
+  });
+}
+
+/** Apply mutate(unit) to one unit and persist. Returns the unit or null. */
+export function updateUnit(id, mutate) {
+  return withLock(async () => {
+    const units = await readAll();
+    const unit = units.find((u) => u.id === id);
+    if (!unit) return null;
+    const result = mutate(unit);
+    if (result === false) return null; // mutation aborted (e.g. module not found)
+    await writeAll(units);
+    return unit;
   });
 }
