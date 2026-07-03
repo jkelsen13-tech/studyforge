@@ -7,6 +7,16 @@ import { fileURLToPath } from "url";
 import Anthropic from "@anthropic-ai/sdk";
 
 import { prepareFiles, generateUnits, isSupportedFile, validateQuestions } from "./src/generator.js";
+import {
+  LEVEL_NAMES,
+  extractConcepts,
+  generateQuestion,
+  gradeResponse,
+  applyLevelChange,
+  stashQuestion,
+  takeQuestion,
+  selectConcept,
+} from "./src/recall.js";
 import { createJob, getJob, updateJob } from "./src/jobs.js";
 import { ASSETS_DIR, listUnits, getUnit, createUnit, deleteUnit, updateUnit } from "./src/store.js";
 
@@ -211,6 +221,116 @@ app.post("/api/units/:id/progress", async (req, res, next) => {
     res.json(unit);
   } catch (err) {
     next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Spaced recall (question engine: GENERATE / GRADE)
+// ---------------------------------------------------------------------------
+
+function conceptSummaries(mod) {
+  return (mod.recall?.concepts || []).map((c) => ({ id: c.id, name: c.name, level: c.level, attempts: c.attempts }));
+}
+
+app.post("/api/units/:id/modules/:moduleId/recall/question", async (req, res) => {
+  try {
+    let unit = await getUnit(req.params.id);
+    const mod = unit?.modules.find((m) => m.id === req.params.moduleId);
+    if (!mod) return res.status(404).json({ error: "Unit or module not found." });
+
+    // Lazily extract this module's key concepts on first practice.
+    if (!mod.recall?.concepts?.length) {
+      const concepts = await extractConcepts(mod.title, mod.content);
+      unit = await updateUnit(req.params.id, (u) => {
+        const m = u.modules.find((x) => x.id === req.params.moduleId);
+        if (!m) return false;
+        m.recall = { concepts };
+      });
+      if (!unit) return res.status(404).json({ error: "Unit or module not found." });
+    }
+
+    const freshMod = unit.modules.find((m) => m.id === req.params.moduleId);
+    const concept = selectConcept(freshMod.recall.concepts);
+    const question = await generateQuestion({
+      content: freshMod.content,
+      conceptName: `${concept.name} — ${concept.description}`,
+      level: concept.level,
+    });
+
+    const questionId = stashQuestion({
+      unitId: unit.id,
+      moduleId: freshMod.id,
+      conceptId: concept.id,
+      level: concept.level,
+      prompt: question.prompt,
+      correctAnswer: question.correctAnswer,
+      gradingNotes: question.gradingNotes,
+    });
+
+    res.json({
+      questionId,
+      concept: concept.name,
+      level: concept.level,
+      levelName: LEVEL_NAMES[concept.level],
+      prompt: question.prompt,
+      options: question.options,
+      concepts: conceptSummaries(freshMod),
+    });
+  } catch (err) {
+    console.error("Recall question failed:", err);
+    const { status, error } = apiErrorResponse(err);
+    res.status(status).json({ error });
+  }
+});
+
+app.post("/api/recall/answer", async (req, res) => {
+  try {
+    const { questionId, response } = req.body || {};
+    if (typeof response !== "string" || !response.trim()) {
+      return res.status(400).json({ error: "Type an answer first." });
+    }
+    const question = takeQuestion(questionId);
+    if (!question) {
+      return res.status(404).json({ error: "This question expired. Get a new one." });
+    }
+
+    const grade = await gradeResponse({
+      level: question.level,
+      prompt: question.prompt,
+      correctAnswer: question.correctAnswer,
+      gradingNotes: question.gradingNotes,
+      response: response.trim(),
+    });
+
+    const newLevel = applyLevelChange(question.level, grade.levelChange);
+    let conceptName = "";
+    let concepts = [];
+    const unit = await updateUnit(question.unitId, (u) => {
+      const mod = u.modules.find((m) => m.id === question.moduleId);
+      const concept = mod?.recall?.concepts.find((c) => c.id === question.conceptId);
+      if (!concept) return false;
+      concept.level = newLevel;
+      concept.attempts += 1;
+      concept.lastPracticed = new Date().toISOString();
+      conceptName = concept.name;
+      concepts = conceptSummaries(mod);
+    });
+    if (!unit) return res.status(404).json({ error: "Unit, module, or concept not found." });
+
+    res.json({
+      correct: grade.correct,
+      feedback: grade.feedback,
+      levelChange: grade.levelChange,
+      oldLevel: question.level,
+      newLevel,
+      levelName: LEVEL_NAMES[newLevel],
+      concept: conceptName,
+      concepts,
+    });
+  } catch (err) {
+    console.error("Recall grading failed:", err);
+    const { status, error } = apiErrorResponse(err);
+    res.status(status).json({ error });
   }
 });
 

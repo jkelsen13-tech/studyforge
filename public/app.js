@@ -13,6 +13,7 @@ const screens = {
   quiz: $("screen-quiz"),
   results: $("screen-results"),
   activity: $("screen-activity"),
+  recall: $("screen-recall"),
 };
 
 function showScreen(name) {
@@ -301,7 +302,18 @@ function renderUnit() {
     editBtn.textContent = "Edit Quiz";
     editBtn.addEventListener("click", () => openEditor({ kind: "moduleQuiz", moduleId: mod.id }));
 
-    actions.append(quizBtn, editBtn);
+    const recallBtn = document.createElement("button");
+    recallBtn.className = "btn btn-secondary";
+    const concepts = mod.recall?.concepts || [];
+    if (concepts.length > 0) {
+      const avg = concepts.reduce((n, c) => n + c.level, 0) / concepts.length;
+      recallBtn.textContent = `🧠 Recall Practice (mastery ${avg.toFixed(1)}/4)`;
+    } else {
+      recallBtn.textContent = "🧠 Recall Practice";
+    }
+    recallBtn.addEventListener("click", () => startRecall(mod));
+
+    actions.append(quizBtn, editBtn, recallBtn);
     card.appendChild(actions);
 
     if (mod.activities.length > 0) {
@@ -1157,6 +1169,221 @@ function renderScenario(body, data) {
 
   renderStep();
 }
+
+// ============================================================
+// SPACED RECALL
+// ============================================================
+let recall = null; // { moduleId, moduleTitle, question, answered }
+
+function startRecall(mod) {
+  recall = { moduleId: mod.id, moduleTitle: mod.title, question: null, answered: false };
+  $("recall-context").textContent = `Spaced Recall — ${mod.title}`;
+  $("recall-mastery-card").hidden = true;
+  showScreen("recall");
+  nextRecallQuestion();
+}
+
+function levelDots(level, changed) {
+  const wrap = document.createElement("div");
+  wrap.className = "level-dots";
+  for (let i = 1; i <= 4; i++) {
+    const dot = document.createElement("span");
+    dot.className = "level-dot";
+    if (i <= level) dot.classList.add("filled");
+    if (changed === "up" && i === level) dot.classList.replace("filled", "gained");
+    if (changed === "down" && i === level + 1) dot.classList.add("lost");
+    wrap.appendChild(dot);
+  }
+  return wrap;
+}
+
+function renderRecallLevel(level, levelName, changed) {
+  const badge = $("recall-level");
+  badge.innerHTML = "";
+  const name = document.createElement("span");
+  name.className = "level-name";
+  name.textContent = `Level ${level} · ${levelName}`;
+  badge.append(name, levelDots(level, changed));
+}
+
+function renderMastery(concepts) {
+  const card = $("recall-mastery-card");
+  const list = $("recall-mastery");
+  list.innerHTML = "";
+  card.hidden = !concepts || concepts.length === 0;
+  for (const c of concepts || []) {
+    const li = document.createElement("li");
+    const info = document.createElement("div");
+    info.className = "mastery-info";
+    const name = document.createElement("span");
+    name.textContent = c.name;
+    const sub = document.createElement("span");
+    sub.className = "mastery-sub";
+    sub.textContent = `${c.attempts} attempt${c.attempts === 1 ? "" : "s"}`;
+    info.append(name, sub);
+    li.append(info, levelDots(c.level));
+    list.appendChild(li);
+  }
+}
+
+async function nextRecallQuestion() {
+  hideError("recall-error");
+  $("recall-question-area").hidden = true;
+  $("recall-feedback").hidden = true;
+  $("btn-recall-submit").hidden = true;
+  $("btn-recall-next").hidden = true;
+  $("recall-loading").hidden = false;
+  $("recall-loading-text").textContent = recall.question
+    ? "Generating your next question…"
+    : "Finding this module's key concepts and generating your first question…";
+  $("recall-concept").innerHTML = "&nbsp;";
+  $("recall-level").innerHTML = "";
+
+  try {
+    const res = await fetch(`/api/units/${unit.id}/modules/${recall.moduleId}/recall/question`, { method: "POST" });
+    const q = await res.json();
+    if (!res.ok) throw new Error(q.error || "Could not generate a question.");
+
+    recall.question = q;
+    recall.answered = false;
+    $("recall-loading").hidden = true;
+    $("recall-concept").textContent = q.concept;
+    renderRecallLevel(q.level, q.levelName);
+    renderMastery(q.concepts);
+    $("recall-prompt").textContent = q.prompt;
+    renderRecallInput(q);
+    $("recall-question-area").hidden = false;
+  } catch (err) {
+    $("recall-loading").hidden = true;
+    showError("recall-error", err.message);
+  }
+}
+
+function renderRecallInput(q) {
+  const input = $("recall-input");
+  input.innerHTML = "";
+  const submit = $("btn-recall-submit");
+
+  if (q.level === 0 && q.options) {
+    // Recognition: click an option to answer immediately.
+    submit.hidden = true;
+    const options = document.createElement("div");
+    options.className = "quiz-options";
+    q.options.forEach((opt, oi) => {
+      const btn = document.createElement("button");
+      btn.className = "option-btn";
+      const l = document.createElement("span");
+      l.className = "option-letter";
+      l.textContent = letter(oi);
+      const label = document.createElement("span");
+      label.textContent = opt;
+      btn.append(l, label);
+      btn.addEventListener("click", () => {
+        if (recall.answered) return;
+        [...options.children].forEach((b) => (b.disabled = true));
+        btn.classList.add("selected");
+        submitRecallAnswer(opt);
+      });
+      options.appendChild(btn);
+    });
+    input.appendChild(options);
+    return;
+  }
+
+  // Levels 1-2: single-line answer; levels 3-4: free response.
+  const el = document.createElement(q.level <= 2 ? "input" : "textarea");
+  el.className = "recall-text-input" + (q.level >= 3 ? " recall-textarea" : "");
+  el.id = "recall-answer";
+  el.placeholder =
+    q.level <= 2 ? "Type the missing part…" : "Answer in your own words — wording doesn't need to match the material.";
+  if (el.tagName === "INPUT") {
+    el.type = "text";
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submit.click();
+    });
+  }
+  input.appendChild(el);
+  el.focus();
+
+  submit.hidden = false;
+  submit.onclick = () => {
+    const value = el.value.trim();
+    if (!value) return showError("recall-error", "Type an answer first.");
+    hideError("recall-error");
+    el.disabled = true;
+    submitRecallAnswer(value);
+  };
+}
+
+async function submitRecallAnswer(response) {
+  if (recall.answered) return;
+  recall.answered = true;
+  const submit = $("btn-recall-submit");
+  submit.disabled = true;
+  submit.textContent = "Grading…";
+
+  try {
+    const res = await fetch("/api/recall/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ questionId: recall.question.questionId, response }),
+    });
+    const grade = await res.json();
+    if (!res.ok) throw new Error(grade.error || "Grading failed.");
+
+    renderRecallLevel(grade.newLevel, grade.levelName, grade.levelChange);
+    renderMastery(grade.concepts);
+
+    const fb = $("recall-feedback");
+    fb.innerHTML = "";
+    fb.className = `feedback ${grade.correct ? "good" : "bad"}`;
+    const title = document.createElement("div");
+    title.className = "feedback-title";
+    title.textContent = grade.correct ? "✓ Correct!" : grade.levelChange === "stay" ? "◐ Partially there." : "✗ Not quite.";
+    fb.appendChild(title);
+    if (grade.feedback) {
+      const detail = document.createElement("div");
+      detail.textContent = grade.feedback;
+      fb.appendChild(detail);
+    }
+    const move = document.createElement("div");
+    move.className = `level-move ${grade.levelChange}`;
+    move.textContent =
+      grade.levelChange === "up"
+        ? `Level up: ${grade.concept} → Level ${grade.newLevel} (${grade.levelName})`
+        : grade.levelChange === "down"
+          ? `Level down: ${grade.concept} → Level ${grade.newLevel} (${grade.levelName})`
+          : `${grade.concept} stays at Level ${grade.newLevel} (${grade.levelName})`;
+    fb.appendChild(move);
+    fb.hidden = false;
+
+    const next = $("btn-recall-next");
+    next.hidden = false;
+    next.focus();
+  } catch (err) {
+    recall.answered = false;
+    // Re-enable whatever input this level used so the learner can retry.
+    $("recall-input")
+      .querySelectorAll("input, textarea, button")
+      .forEach((el) => {
+        el.disabled = false;
+        el.classList.remove("selected");
+      });
+    showError("recall-error", err.message);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Submit Answer";
+    if (recall.answered) submit.hidden = true;
+  }
+}
+
+$("btn-recall-next").addEventListener("click", nextRecallQuestion);
+$("btn-recall-end").addEventListener("click", async () => {
+  recall = null;
+  await refreshUnit();
+  renderUnit();
+  showScreen("unit");
+});
 
 // ============================================================
 // Shared helpers

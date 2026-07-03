@@ -153,6 +153,44 @@
       </div>
     </section>
 
+    <!-- ============ SPACED RECALL ============ -->
+    <section id="screen-recall" class="screen" hidden>
+      <div class="card">
+        <div class="module-head">
+          <div>
+            <div class="module-number" id="recall-context"></div>
+            <h2 id="recall-concept">&nbsp;</h2>
+          </div>
+          <div class="level-badge" id="recall-level"></div>
+        </div>
+
+        <div id="recall-loading" class="center" hidden>
+          <div class="spinner"></div>
+          <p class="muted" id="recall-loading-text">Generating your question…</p>
+        </div>
+
+        <div id="recall-question-area" hidden>
+          <p id="recall-prompt" class="quiz-question"></p>
+          <div id="recall-input"></div>
+        </div>
+
+        <div id="recall-feedback" class="feedback" hidden></div>
+
+        <div class="actions">
+          <button id="btn-recall-end" class="btn btn-secondary">End Session</button>
+          <button id="btn-recall-submit" class="btn btn-primary" hidden>Submit Answer</button>
+          <button id="btn-recall-next" class="btn btn-primary" hidden>Next Question →</button>
+        </div>
+        <p id="recall-error" class="error" hidden></p>
+      </div>
+
+      <div class="card" id="recall-mastery-card" hidden>
+        <h2>Concept mastery</h2>
+        <p class="muted small">Answer correctly to level up a concept; misses drop it one level. Levels: Recognition → Cued recall → Deep recall → Free recall → Transfer.</p>
+        <ul id="recall-mastery" class="mastery-list"></ul>
+      </div>
+    </section>
+
   </main>
 
   <script src="app.js"></script>

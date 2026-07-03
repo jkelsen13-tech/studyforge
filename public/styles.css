@@ -542,3 +542,55 @@ input:focus, textarea:focus { outline: 2px solid var(--primary); outline-offset:
   font-size: 1rem;
 }
 .scenario-options { display: flex; flex-direction: column; gap: 10px; }
+
+/* ---------- Spaced recall ---------- */
+.level-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+.level-badge .level-name { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+.level-dots { display: flex; gap: 4px; }
+.level-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+}
+.level-dot.filled { background: var(--primary); border-color: var(--primary); }
+.level-dot.gained { background: var(--correct); border-color: var(--correct); }
+.level-dot.lost { background: transparent; border-color: var(--wrong); }
+
+.recall-text-input {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 1rem;
+}
+.recall-textarea { min-height: 120px; resize: vertical; }
+
+.level-move { font-weight: 700; margin-top: 6px; font-size: 0.9rem; }
+.level-move.up { color: var(--correct); }
+.level-move.down { color: var(--wrong); }
+.level-move.stay { color: var(--muted); }
+
+.mastery-list { list-style: none; padding: 0; margin: 0; }
+.mastery-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.94rem;
+}
+.mastery-list li:last-child { border-bottom: none; }
+.mastery-list .mastery-info { display: flex; flex-direction: column; }
+.mastery-list .mastery-sub { color: var(--muted); font-size: 0.8rem; }

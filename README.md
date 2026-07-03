@@ -14,7 +14,15 @@ Upload lecture slides, PDFs, or handwritten notes and StudyForge organizes them 
      - 🔀 **Ordering** — put the steps of a process in the right sequence
      - 🎮 **Scenario** — a step-by-step simulation where you apply what the slides explain and get feedback on each decision
 4. **Unit test** — every unit gets a 20–30 question test spanning all its modules.
-5. **Track progress** — best scores per module quiz and unit test, plus checkmarks on completed activities.
+5. **Spaced recall practice** — 🧠 per module, a question engine tracks a mastery level (0–4) for each key concept and serves the right question format for where you are:
+   - **Level 0 · Recognition** — multiple choice with misconception-based distractors
+   - **Level 1 · Light cued recall** — fill in the blanked *term* in a key sentence
+   - **Level 2 · Deep cued recall** — fill in the blanked *defining phrase*
+   - **Level 3 · Free recall** — explain it in your own words, no scaffold
+   - **Level 4 · Transfer** — apply the concept to a brand-new scenario
+
+   Correct answers level a concept up; misses drop it one level. Levels 0–1 are graded by string match locally (with typo tolerance); levels 2–4 are graded by Claude for *meaning*, not wording — a correct answer in your own words counts, a fluent answer that misses the mechanism doesn't. This scaffolding spectrum works for both repetition-driven learners (who benefit from cued formats first) and structure-driven learners (who race to free recall and transfer).
+6. **Track progress** — best scores per module quiz and unit test, checkmarks on completed activities, and per-concept mastery dots.
 
 Quizzes and tests run DMV-style: one question at a time, instant green/red feedback, explanations on wrong answers, a live score, and a results screen listing every missed question.
 
@@ -62,3 +70,5 @@ All model output is constrained with structured JSON schemas and validated serve
 | `PUT` | `/api/units/:id/modules/:moduleId/quiz` | Edit a module's quiz (and title) |
 | `PUT` | `/api/units/:id/unit-test` | Edit the unit test (and unit title) |
 | `POST` | `/api/units/:id/progress` | Record best quiz/test scores and completed activities |
+| `POST` | `/api/units/:id/modules/:moduleId/recall/question` | Get the next spaced-recall question (extracts concepts on first use) |
+| `POST` | `/api/recall/answer` | Grade a recall answer and move the concept's mastery level |
